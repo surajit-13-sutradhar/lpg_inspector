@@ -13,7 +13,11 @@ dependencies = [
     "uvicorn[standard]",
     "pydantic",
     "openai",
+    "python-dotenv",
 ]
+
+[project.scripts]
+server = "server.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
