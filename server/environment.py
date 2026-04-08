@@ -4,6 +4,7 @@ LPG Inspector Environment — core logic.
 Implements reset(), step(), and state property.
 No networking here — pure business logic only.
 """
+# -*- coding: utf-8 -*-
 
 import uuid
 from typing import Optional
@@ -569,12 +570,12 @@ class LPGInspectorEnvironment(Environment):
             )
         elif correct:
             return (
-                f"✓ Correct decision: {action.decision}.\n"
+                f"Correct decision: {action.decision}.\n"
                 f"Score: {score:.4f}"
             )
         else:
             return (
-                f"✗ Incorrect. You submitted {action.decision}, "
+                f" Incorrect. You submitted {action.decision}, "
                 f"ground truth was {gt}.\n"
                 f"Score: {score:.4f}"
             )
@@ -591,7 +592,7 @@ class LPGInspectorEnvironment(Environment):
         step = self._current_step
         total = len(self._batch)
 
-        status = "✓" if correct else "✗"
+        status = "[CORRECT]" if correct else "[INCORRECT]"
         base = (
             f"{status} Cylinder {step}/{total}: "
             f"You said {action.decision}, ground truth was {gt}.\n"
@@ -610,12 +611,12 @@ class LPGInspectorEnvironment(Environment):
 
         if correct:
             return (
-                f"✓ Correct batch identified: {submitted}.\n"
+                f"Correct batch identified: {submitted}.\n"
                 f"Final score: {score:.4f}"
             )
         else:
             return (
-                f"✗ Incorrect batch. You submitted {submitted}, "
+                f" Incorrect batch. You submitted {submitted}, "
                 f"faulty batch was {correct_batch}.\n"
                 f"Final score: {score:.4f}"
             )

@@ -43,7 +43,7 @@ The agent receives one `LPGInspectorObservation` per step:
 | `cylinder_id` | str | Unique cylinder serial number |
 | `batch_id` | str | Batch this cylinder belongs to |
 | `weight_kg` | float | Fill weight (nominal: 14.2 ± 0.15 kg) |
-| `valve_pressure_bar` | float | Valve pressure (safe: 6.5–7.5 bar) |
+| `valve_pressure_bar` | float | Valve pressure (safe: 6.5-7.5 bar) |
 | `qr_status` | str | `VALID` `INVALID` `MISSING` `DUPLICATE` |
 | `body_condition` | str | `GOOD` `MINOR_DENT` `MAJOR_DENT` `RUST_MINOR` `RUST_CRITICAL` |
 | `fill_date` | str | Date cylinder was filled |
@@ -54,7 +54,7 @@ The agent receives one `LPGInspectorObservation` per step:
 | `incident_report` | str | Field complaint text (hard task only) |
 | `available_batch_ids` | List[str] | Batch IDs to investigate (hard task) |
 | `feedback_message` | str | Environment feedback on last action |
-| `progress_score` | float | Episode progress 0.0–1.0 |
+| `progress_score` | float | Episode progress 0.0-1.0 |
 | `done` | bool | Is episode complete? (inherited) |
 | `reward` | float | Last step reward (inherited) |
 
@@ -153,9 +153,9 @@ Evaluated using `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Inference Providers:
 
 | Task | Score | Steps | Status |
 |---|---|---|---|
-| `single_cylinder_triage` | 0.990 | 1 | ✅ PASS |
-| `batch_inspection` | 0.920 | 10 | ✅ PASS |
-| `incident_root_cause` | 0.320 | 1 | ❌ FAIL |
+| `single_cylinder_triage` | 0.990 | 1 | PASS |
+| `batch_inspection` | 0.920 | 10 | PASS |
+| `incident_root_cause` | 0.320 | 1 | FAIL |
 | **Average** | **0.743** | — | — |
 
 The hard task (incident root cause) correctly identifies the faulty batch

@@ -2,6 +2,7 @@
 server/app.py
 FastAPI server wiring for LPG Inspector environment.
 """
+# -*- coding: utf-8 -*-
 
 import uvicorn
 from openenv.core.env_server import create_fastapi_app
