@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "lpg_inspector"
+version = "1.0.0"
+description = "LPG Cylinder Quality Control Inspector — OpenEnv Environment"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core",
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "openai",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lpg_inspector*", "server*"]

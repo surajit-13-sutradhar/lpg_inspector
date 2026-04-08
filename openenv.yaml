@@ -1,0 +1,19 @@
+name: lpg_inspector
+version: "1.0.0"
+description: "LPG Cylinder Quality Control Inspector — AI triage and dispatch decision environment for safety-critical industrial inspection pipelines."
+tags:
+  - openenv
+  - industrial
+  - safety
+  - quality-control
+  - lpg
+tasks:
+  - name: single_cylinder_triage
+    description: "Inspect a single LPG cylinder and make the correct PASS/FAIL/RETEST/QUARANTINE decision based on sensor readings."
+    difficulty: easy
+  - name: batch_inspection
+    description: "Process a batch of 10 cylinders, classify each correctly, and optimize dispatch priority."
+    difficulty: medium
+  - name: incident_root_cause
+    description: "Investigate a field incident, identify the faulty batch from multiple batch records, determine recall scope, and recommend corrective action."
+    difficulty: hard
