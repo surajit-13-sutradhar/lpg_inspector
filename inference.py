@@ -37,7 +37,8 @@ from models import LPGInspectorAction
 API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
-ENV_URL      = os.getenv("LPG_ENV_URL",  "http://localhost:8000")
+ENV_URL = os.getenv("LPG_ENV_URL", "https://crow1234des-lpg-inspector.hf.space")
+
 BENCHMARK    = "lpg_inspector"
 
 TEMPERATURE  = 0.2    # Low temperature for consistent decisions
@@ -294,34 +295,40 @@ async def run_task(task_name: str, client: OpenAI) -> dict:
     env = LPGInspectorEnv(base_url=ENV_URL)
 
     try:
-        result = await env.reset(task_name=task_name)
+        try:
+            result = await env.reset(task_name=task_name)
+        except Exception as exc:
+            print(f"[DEBUG] env.reset() failed: {exc}", flush=True)
+            log_step(step=1, action="reset_failed", reward=0.0, done=True, error=str(exc)[:100])
+            score   = 0.0
+            success = False
+            return {"task": task_name, "score": score, "success": success, "steps": 0}
 
         for step in range(1, max_steps + 1):
             if result.done:
                 break
 
             # Format observation for LLM
-            obs_text  = format_observation(result.observation)
+            obs_text = format_observation(result.observation)
 
             # Get LLM decision
-            llm_text  = call_llm(client, system, obs_text)
-            action    = parse_llm_response(llm_text)
+            llm_text = call_llm(client, system, obs_text)
+            action   = parse_llm_response(llm_text)
 
             # Step environment
             error = None
             try:
-                result  = await env.step(action)
-                reward  = float(result.reward or 0.0)
-                done    = result.done
+                result = await env.step(action)
+                reward = float(result.reward or 0.0)
+                done   = result.done
             except Exception as exc:
-                reward  = 0.0
-                done    = True
-                error   = str(exc)[:100]
+                reward = 0.0
+                done   = True
+                error  = str(exc)[:100]
 
             rewards.append(reward)
             steps_taken = step
 
-            # Log step — action summary for [STEP] line
             action_summary = (
                 f"{action.decision}|"
                 f"flags={'+'.join(action.defect_flags) if action.defect_flags else 'NONE'}|"
@@ -342,6 +349,11 @@ async def run_task(task_name: str, client: OpenAI) -> dict:
         score   = max(rewards) if rewards else 0.0
         score   = min(max(score, 0.0), 1.0)
         success = score >= SUCCESS_THRESHOLD
+
+    except Exception as exc:
+        print(f"[DEBUG] Unhandled exception in run_task: {exc}", flush=True)
+        score   = 0.0
+        success = False
 
     finally:
         try:
