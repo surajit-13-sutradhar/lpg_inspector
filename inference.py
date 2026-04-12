@@ -14,7 +14,7 @@ USAGE:
     set HF_TOKEN=hf_...
     set API_BASE_URL=https://router.huggingface.co/v1
     set MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
-    set LPG_ENV_URL=https://YOUR_USERNAME-lpg-inspector.hf.space
+    set LPG_ENV_URL=https://crow1234des-lpg-inspector.hf.space
     python inference.py
 """
 
@@ -37,15 +37,15 @@ from models import LPGInspectorAction
 API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
-ENV_URL = os.getenv("LPG_ENV_URL", "https://crow1234des-lpg-inspector.hf.space")
-
+ENV_URL      = os.getenv("LPG_ENV_URL",  "https://crow1234des-lpg-inspector.hf.space")
 BENCHMARK    = "lpg_inspector"
 
-TEMPERATURE  = 0.2    # Low temperature for consistent decisions
-MAX_TOKENS   = 300
+TEMPERATURE       = 0.2
+MAX_TOKENS        = 300
 SUCCESS_THRESHOLD = 0.5
+MAX_RETRIES       = 3
+RETRY_DELAY_S     = 5
 
-# Max steps per task
 MAX_STEPS = {
     "single_cylinder_triage": 5,
     "batch_inspection":       10,
@@ -100,7 +100,7 @@ INCIDENT_SYSTEM_PROMPT = textwrap.dedent("""
 
     RESPONSE FORMAT (strictly follow this):
     DECISION: <the faulty batch ID, e.g. BATCH-20241103-S02>
-    FLAGS: <comma-separated batch IDs to recall>
+    FLAGS: <comma-separated batch IDs to recall — only the faulty one>
     PRIORITY: URGENT
     REASON: <explain root cause and corrective action in one sentence>
 """).strip()
@@ -119,8 +119,8 @@ def log_step(
     done:   bool,
     error:  Optional[str],
 ) -> None:
-    error_val  = error if error else "null"
-    done_val   = str(done).lower()
+    error_val    = error if error else "null"
+    done_val     = str(done).lower()
     action_clean = action.replace("\n", " ").replace("\r", "")[:120]
     print(
         f"[STEP] step={step} action={action_clean} "
@@ -145,12 +145,8 @@ def log_end(
 
 # ─── LLM Interaction ──────────────────────────────────────────────────────────
 
-def call_llm(
-    client:      OpenAI,
-    system:      str,
-    user:        str,
-) -> str:
-    """Call LLM and return raw text response."""
+def call_llm(client: OpenAI, system: str, user: str) -> str:
+    """Call LLM and return raw text. Never raises — returns empty string on failure."""
     try:
         completion = client.chat.completions.create(
             model       = MODEL_NAME,
@@ -169,14 +165,11 @@ def call_llm(
 
 
 def parse_llm_response(text: str) -> LPGInspectorAction:
-    """
-    Parse LLM response into a typed LPGInspectorAction.
-    Robust — handles imperfect formatting.
-    """
+    """Parse LLM response into a typed action. Robust — handles imperfect formatting."""
     text = text.strip()
 
     # Extract DECISION
-    decision = "RETEST"   # safe default
+    decision = "RETEST"
     m = re.search(r"DECISION:\s*([A-Z_\-0-9]+)", text)
     if m:
         decision = m.group(1).strip()
@@ -216,7 +209,7 @@ def parse_llm_response(text: str) -> LPGInspectorAction:
 # ─── Observation Formatting ───────────────────────────────────────────────────
 
 def format_observation(obs) -> str:
-    """Format observation into natural language for the LLM."""
+    """Format typed observation into natural language for the LLM."""
 
     # Incident task — show report
     if obs.incident_report:
@@ -227,22 +220,24 @@ def format_observation(obs) -> str:
             AVAILABLE BATCH IDs TO INVESTIGATE:
             {batches_str}
 
+            INSTRUCTIONS: Identify ONE faulty batch.
+            Set FLAGS to contain ONLY that batch ID.
             {obs.feedback_message}
         """).strip()
 
-    # Single cylinder or batch
+    # Single cylinder or batch task
     lines = [
-        f"CYLINDER INSPECTION REPORT",
+        "CYLINDER INSPECTION REPORT",
         f"Cylinder ID:       {obs.cylinder_id}",
         f"Batch ID:          {obs.batch_id}",
-        f"",
-        f"SENSOR READINGS:",
+        "",
+        "SENSOR READINGS:",
         f"  Weight:          {obs.weight_kg} kg  (acceptable: 14.05 to 14.35 kg)",
         f"  Valve Pressure:  {obs.valve_pressure_bar} bar  (safe: 6.5 to 7.5 bar)",
         f"  QR Status:       {obs.qr_status}",
         f"  Body Condition:  {obs.body_condition}",
-        f"",
-        f"CONTEXT:",
+        "",
+        "CONTEXT:",
         f"  Fill Date:       {obs.fill_date}",
         f"  Prev Failures:   {obs.previous_failures}",
         f"  Dest Zone:       {obs.destination_zone}",
@@ -252,8 +247,8 @@ def format_observation(obs) -> str:
     if obs.batch_context:
         ctx = obs.batch_context
         lines += [
-            f"",
-            f"BATCH PROGRESS:",
+            "",
+            "BATCH PROGRESS:",
             f"  Processed: {ctx.cylinders_processed}/{ctx.batch_size}",
             f"  Passed: {ctx.cylinders_passed} | "
             f"Failed: {ctx.cylinders_failed} | "
@@ -264,9 +259,9 @@ def format_observation(obs) -> str:
             lines.append(f"  Alerts: {'; '.join(ctx.batch_alerts)}")
 
     lines += [
-        f"",
+        "",
         f"Step {obs.step_number}/{obs.total_steps}",
-        f"{obs.feedback_message}",
+        obs.feedback_message,
     ]
 
     return "\n".join(lines)
@@ -274,16 +269,60 @@ def format_observation(obs) -> str:
 
 # ─── Task Runner ──────────────────────────────────────────────────────────────
 
+async def _try_reset(env: LPGInspectorEnv, task_name: str):
+    """Attempt reset with retries. Returns result or raises."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            return await env.reset(task_name=task_name)
+        except Exception as exc:
+            print(f"[DEBUG] reset() attempt {attempt+1}/{MAX_RETRIES} failed: {exc}", flush=True)
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAY_S)
+            else:
+                raise
+
+
+async def _try_step(env: LPGInspectorEnv, action: LPGInspectorAction, task_name: str):
+    """Attempt step with retries on WebSocket disconnect. Returns (result, error_str)."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            result = await env.step(action)
+            return result, None
+        except Exception as exc:
+            error_msg = str(exc)
+            print(f"[DEBUG] step() attempt {attempt+1}/{MAX_RETRIES} failed: {error_msg}", flush=True)
+
+            is_disconnect = any(
+                code in error_msg for code in ["1012", "1011", "1006", "service restart", "connect call failed"]
+            )
+
+            if is_disconnect and attempt < MAX_RETRIES - 1:
+                # Reconnect — create fresh env and reset
+                print(f"[DEBUG] Reconnecting...", flush=True)
+                try:
+                    await env.close()
+                except Exception:
+                    pass
+                await asyncio.sleep(RETRY_DELAY_S)
+                try:
+                    await env.reset(task_name=task_name)
+                except Exception:
+                    pass
+            else:
+                return None, error_msg[:100]
+
+    return None, "max_retries_exceeded"
+
+
 async def run_task(task_name: str, client: OpenAI) -> dict:
-    """Run one full task episode. Returns results dict."""
+    """Run one full task episode. Always emits [END]. Never raises."""
 
-    rewards:      List[float] = []
-    steps_taken:  int         = 0
-    score:        float       = 0.0
-    success:      bool        = False
-    max_steps     = MAX_STEPS[task_name]
+    rewards:     List[float] = []
+    steps_taken: int         = 0
+    score:       float       = 0.0
+    success:     bool        = False
+    max_steps                = MAX_STEPS[task_name]
 
-    # Pick system prompt
     system = (
         INCIDENT_SYSTEM_PROMPT
         if task_name == "incident_root_cause"
@@ -295,36 +334,36 @@ async def run_task(task_name: str, client: OpenAI) -> dict:
     env = LPGInspectorEnv(base_url=ENV_URL)
 
     try:
+        # ── Reset ─────────────────────────────────────────────────────────────
         try:
-            result = await env.reset(task_name=task_name)
+            result = await _try_reset(env, task_name)
         except Exception as exc:
-            print(f"[DEBUG] env.reset() failed: {exc}", flush=True)
+            print(f"[DEBUG] All reset() attempts failed: {exc}", flush=True)
             log_step(step=1, action="reset_failed", reward=0.0, done=True, error=str(exc)[:100])
-            score   = 0.0
-            success = False
-            return {"task": task_name, "score": score, "success": success, "steps": 0}
+            return {"task": task_name, "score": 0.0, "success": False, "steps": 0}
 
+        # ── Episode loop ──────────────────────────────────────────────────────
         for step in range(1, max_steps + 1):
             if result.done:
                 break
 
-            # Format observation for LLM
+            # Format observation → LLM prompt
             obs_text = format_observation(result.observation)
 
-            # Get LLM decision
+            # LLM call
             llm_text = call_llm(client, system, obs_text)
             action   = parse_llm_response(llm_text)
 
             # Step environment
-            error = None
-            try:
-                result = await env.step(action)
+            step_result, error = await _try_step(env, action, task_name)
+
+            if step_result is not None:
+                result = step_result
                 reward = float(result.reward or 0.0)
                 done   = result.done
-            except Exception as exc:
+            else:
                 reward = 0.0
                 done   = True
-                error  = str(exc)[:100]
 
             rewards.append(reward)
             steps_taken = step
@@ -345,13 +384,13 @@ async def run_task(task_name: str, client: OpenAI) -> dict:
             if done:
                 break
 
-        # Final score
+        # ── Final score ───────────────────────────────────────────────────────
         score   = max(rewards) if rewards else 0.0
         score   = min(max(score, 0.0), 1.0)
         success = score >= SUCCESS_THRESHOLD
 
     except Exception as exc:
-        print(f"[DEBUG] Unhandled exception in run_task: {exc}", flush=True)
+        print(f"[DEBUG] Unhandled exception in run_task({task_name}): {exc}", flush=True)
         score   = 0.0
         success = False
 
@@ -361,6 +400,7 @@ async def run_task(task_name: str, client: OpenAI) -> dict:
         except Exception as exc:
             print(f"[DEBUG] env.close() error: {exc}", flush=True)
 
+        # [END] always emitted — even on exception
         log_end(
             success = success,
             steps   = steps_taken,
@@ -379,7 +419,7 @@ async def run_task(task_name: str, client: OpenAI) -> dict:
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 async def main() -> None:
-    """Run all 3 tasks sequentially."""
+    """Run all 3 tasks sequentially. Never raises."""
     client  = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     tasks   = [
         "single_cylinder_triage",
@@ -388,8 +428,17 @@ async def main() -> None:
     ]
     results = []
 
-    for task in tasks:
-        result = await run_task(task, client)
+    for i, task in enumerate(tasks):
+        if i > 0:
+            print(f"[DEBUG] Waiting {RETRY_DELAY_S}s before next task...", flush=True)
+            await asyncio.sleep(RETRY_DELAY_S)
+
+        try:
+            result = await run_task(task, client)
+        except Exception as exc:
+            print(f"[DEBUG] run_task({task}) raised: {exc}", flush=True)
+            result = {"task": task, "score": 0.0, "success": False, "steps": 0}
+
         results.append(result)
         print(flush=True)
 
